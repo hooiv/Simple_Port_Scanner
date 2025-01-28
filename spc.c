@@ -67,5 +67,5 @@ void port_scanner(char *ip, char *first_port_str, char *last_port_str) {
         }
     }
 
-    printf("Port scanning finished.\n")
+    printf("Port scanning finished.\n");
 }
