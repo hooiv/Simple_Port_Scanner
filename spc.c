@@ -62,7 +62,7 @@ void port_scanner(char *ip, char *first_port_str, char *last_port_str) {
         } else {
             // Port is likely closed or filtered. We don't print error for every closed port to keep output clean.
             // If you want to see errors for closed ports, uncomment the perror line.
-            // perror("Connect failed");
+             perror("Connect failed");
             close(sockfd); // Close the socket even if connection fails
         }
     }
