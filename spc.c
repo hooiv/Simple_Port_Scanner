@@ -1,71 +1,107 @@
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
+#include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <pthread.h>
 #include <errno.h>
 
-void port_scanner(char *ip, char *first_port_str, char *last_port_str);
+#define MAX_THREADS 100  // Maximum number of concurrent threads
+#define TIMEOUT 2         // Timeout for each connection in seconds
 
-int main(int argc, char *argv[]) {
-    if (argc < 4) {
-        printf("Usage: %s <ip_address> <start_port> <end_port>\n", argv[0]);
-        printf("Example: %s 127.0.0.1 1 100\n", argv[0]);
-        return 1;
+typedef struct {
+    char ip[16];
+    int port;
+} PortScanArgs;
+
+// Function to scan a single port
+void *scan_port(void *arg) {
+    PortScanArgs *args = (PortScanArgs *)arg;
+    int sockfd;
+    struct sockaddr_in server_addr;
+
+    // Create socket
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("Socket creation failed");
+        free(arg);
+        return NULL;
     }
 
-    char ip[16] = {0};
-    strcpy(ip, argv[1]);
-    char first_port_str[6] = {0};
-    strcpy(first_port_str, argv[2]);
-    char last_port_str[6] = {0};
-    strcpy(last_port_str, argv[3]);
+    // Set timeout for the connection attempt
+    struct timeval timeout;
+    timeout.tv_sec = TIMEOUT;
+    timeout.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-    port_scanner(ip, first_port_str, last_port_str);
-    return 0;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(args->port);
+    inet_pton(AF_INET, args->ip, &server_addr.sin_addr);
+
+    // Attempt to connect
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == 0) {
+        printf("Port %d: Open\n", args->port);
+    }
+
+    close(sockfd);
+    free(arg);
+    return NULL;
 }
 
-void port_scanner(char *ip, char *first_port_str, char *last_port_str) {
-    int start_port = atoi(first_port_str);
-    int end_port = atoi(last_port_str);
-
-    if (start_port <= 0 || end_port <= 0 || start_port > 65535 || end_port > 65535 || start_port > end_port) {
-        fprintf(stderr, "Invalid port range.\n");
-        return;
-    }
+// Function to create and manage scanning threads
+void port_scanner(char *ip, int start_port, int end_port) {
+    pthread_t threads[MAX_THREADS];
+    int thread_count = 0;
 
     printf("Scanning ports on %s from %d to %d...\n", ip, start_port, end_port);
 
     for (int port = start_port; port <= end_port; port++) {
-        int sockfd = 0;
-        struct sockaddr_in server_addr;
+        PortScanArgs *args = malloc(sizeof(PortScanArgs));
+        strcpy(args->ip, ip);
+        args->port = port;
 
-        sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sockfd < 0) {
-            perror("Socket creation failed");
-            continue; // Continue to the next port even if socket creation fails
+        // Create a new thread for each port scan
+        if (pthread_create(&threads[thread_count], NULL, scan_port, args) != 0) {
+            perror("Thread creation failed");
+            free(args);
         }
 
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(port); // Convert port to network byte order
-        if (inet_pton(AF_INET, ip, &server_addr.sin_addr) <= 0) {
-            fprintf(stderr, "Invalid address: %s\n", ip);
-            close(sockfd);
-            continue; // Continue to the next port if IP address is invalid
-        }
+        thread_count++;
 
-        if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == 0) {
-            printf("Port %d: Open\n", port);
-            close(sockfd); // Close the socket after successful connection
-        } else {
-            // Port is likely closed or filtered. We don't print error for every closed port to keep output clean.
-            // If you want to see errors for closed ports, uncomment the perror line.
-             perror("Connect failed");
-            close(sockfd); // Close the socket even if connection fails
+        // Manage thread pool: Wait for some to finish if limit reached
+        if (thread_count >= MAX_THREADS) {
+            for (int i = 0; i < thread_count; i++) {
+                pthread_join(threads[i], NULL);
+            }
+            thread_count = 0;
         }
     }
 
+    // Wait for any remaining threads to finish
+    for (int i = 0; i < thread_count; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
     printf("Port scanning finished.\n");
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 4) {
+        printf("Usage: %s <ip_address> <start_port> <end_port>\n", argv[0]);
+        return 1;
+    }
+
+    int start_port = atoi(argv[2]);
+    int end_port = atoi(argv[3]);
+
+    if (start_port <= 0 || end_port <= 0 || start_port > 65535 || end_port > 65535 || start_port > end_port) {
+        fprintf(stderr, "Invalid port range.\n");
+        return 1;
+    }
+
+    port_scanner(argv[1], start_port, end_port);
+    return 0;
 }
